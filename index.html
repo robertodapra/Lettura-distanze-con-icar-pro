@@ -3,127 +3,169 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>OBD Racing Master</title>
+    <title>OBD MASTER PRO</title>
     <style>
-        :root { --bg: #000; --accent: #ccff00; --text: #fff; --gray: #333; }
-        body { background: var(--bg); color: var(--text); font-family: 'Courier New', Courier, monospace; margin: 0; overflow: hidden; display: flex; flex-direction: column; height: 100vh; }
+        :root { --bg: #050505; --accent: #d4ff00; --red: #ff3e3e; }
+        body { background: var(--bg); color: white; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
         
-        #header { padding: 10px; border-bottom: 1px solid var(--gray); display: flex; justify-content: space-between; font-size: 12px; }
-        #status-obd { color: #ff3300; }
-        #status-obd.connected { color: var(--accent); }
+        /* Header Stato */
+        #status-bar { display: flex; justify-content: space-between; padding: 15px; font-size: 12px; border-bottom: 1px solid #222; letter-spacing: 1px; }
+        .connected { color: var(--accent); }
+        .disconnected { color: var(--red); }
 
-        #main-display { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
-        #prev-measure { font-size: 20px; color: #888; margin-bottom: 20px; }
-        #current-value { font-size: 120px; font-weight: bold; color: var(--accent); text-shadow: 0 0 20px rgba(204, 255, 0, 0.4); }
-        #label { font-size: 24px; color: #fff; margin-top: 10px; }
+        /* Display Centrale */
+        #display { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; }
+        #last-val { font-size: 18px; color: #666; margin-bottom: 10px; height: 20px; }
+        #main-val { font-size: 100px; font-weight: 900; color: var(--accent); text-align: center; transition: all 0.2s; }
+        #info-label { font-size: 20px; color: #444; margin-top: 20px; text-transform: uppercase; }
 
-        #controls { padding: 20px; display: flex; gap: 10px; }
-        button { flex: 1; padding: 15px; background: var(--gray); color: #fff; border: none; border-radius: 5px; font-weight: bold; }
-        #btn-connect { background: #1a1a1a; border: 1px solid var(--accent); color: var(--accent); }
-        
-        .running { border: 4px solid var(--accent); animation: pulse 1.5s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+        /* Bottoni */
+        #ui-layer { padding: 30px; }
+        button { width: 100%; padding: 20px; background: transparent; border: 2px solid var(--accent); color: var(--accent); border-radius: 12px; font-size: 18px; font-weight: bold; cursor: pointer; }
+        button:active { background: var(--accent); color: black; }
+
+        /* Animazione Registrazione */
+        .recording #main-val { animation: glow 1.5s infinite; }
+        @keyframes glow { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
     </style>
 </head>
 <body>
 
-<div id="header">
-    <div id="status-obd">OBD: DISCONNESSO</div>
-    <div id="speed-display">0 km/h</div>
+<div id="status-bar">
+    <div id="obd-status" class="disconnected">OBD: DISCONNESSO</div>
+    <div id="speedo">0 KM/H</div>
 </div>
 
-<div id="main-display">
-    <div id="prev-measure">ULTIMA: --</div>
-    <div id="current-value">READY</div>
-    <div id="label">PREMI IL TASTO</div>
+<div id="display">
+    <div id="last-val"></div>
+    <div id="main-val">PRONTO</div>
+    <div id="info-label">CONNETTI DISPOSITIVO</div>
 </div>
 
-<div id="controls">
-    <button id="btn-connect" onclick="connectOBD()">1. CONNETTI OBD</button>
+<div id="ui-layer">
+    <button id="conn-btn" onclick="initOBD()">CONNETTI SISTEMA</button>
 </div>
 
 <script>
-    let device, server, characteristic;
-    let state = 0; // 0: Idle, 1: Running, 2: Result
+    let gattChar;
+    let state = 0; // 0: Idle, 1: Running, 2: Stop
     let totalMeters = 0;
-    let lastTime = 0;
-    let currentSpeed = 0;
-    let prevValue = "--";
+    let lastTimestamp = 0;
+    let lastValue = "";
 
-    // --- CONFIGURAZIONE UTENTE ---
-    // Qui l'utente può mappare i metri reali con quello che vuole vedere
+    // --- TABELLA DI MAPPING PERSONALIZZATA ---
     const mapping = [
-        { real: 10, display: "20" },
-        { real: 20, display: "ZONA TEST" },
-        { real: 50, display: "TRAGUARDO" }
+        { threshold: 10, output: "START" },
+        { threshold: 20, output: "40" },
+        { threshold: 30, output: "ZONA TEST" },
+        { threshold: 50, output: "TRAGUARDO" }
     ];
 
-    async function connectOBD() {
+    async function initOBD() {
         try {
-            device = await navigator.bluetooth.requestDevice({
-                filters: [{ namePrefix: 'V-LINK' }, { namePrefix: 'OBD' }, { services: ['0000fff0-0000-1000-8000-00805f9b34fb'] }],
-                optionalServices: ['0000fff0-0000-1000-8000-00805f9b34fb']
+            // Scansione universale
+            const device = await navigator.bluetooth.requestDevice({
+                acceptAllDevices: true,
+                optionalServices: [
+                    '0000fff0-0000-1000-8000-00805f9b34fb',
+                    '000018f0-0000-1000-8000-00805f9b34fb',
+                    'ae08'
+                ]
             });
-            server = await device.gatt.connect();
-            const service = await server.getPrimaryService('0000fff0-0000-1000-8000-00805f9b34fb');
-            characteristic = await service.getCharacteristic('0000fff1-0000-1000-8000-00805f9b34fb');
+
+            const server = await device.gatt.connect();
+            const services = await server.getPrimaryServices();
             
-            document.getElementById('status-obd').innerText = "OBD: CONNESSO";
-            document.getElementById('status-obd').className = "connected";
-            startPolling();
-        } catch (e) { console.log(e); alert("Errore connessione: " + e); }
-    }
-
-    function startPolling() {
-        setInterval(async () => {
-            if (characteristic) {
-                // Invia comando PID 0D (Velocità)
-                await characteristic.writeValue(new TextEncoder().encode("010D\r"));
-                // Qui andrebbe la logica di lettura risposta (omessa per brevità, va rifinita col dispositivo)
+            // Trova la prima caratteristica disponibile per scrivere/leggere
+            for (let service of services) {
+                const chars = await service.getCharacteristics();
+                if (chars.length > 0) {
+                    gattChar = chars[0];
+                    break;
+                }
             }
-        }, 200); // 5 volte al secondo
-    }
 
-    // --- LOGICA 3 CLICK (Tastino Bluetooth) ---
-    // Il tastino solitamente simula un tasto tastiera (es. Volume o Invio)
-    window.addEventListener('keydown', (e) => {
-        handleAction();
-    });
-
-    function handleAction() {
-        if (state === 0) { // START
-            state = 1;
-            totalMeters = 0;
-            lastTime = Date.now();
-            document.getElementById('current-value').innerText = "0";
-            document.getElementById('label').innerText = "MISURAZIONE IN CORSO...";
-            document.body.classList.add('running');
-        } 
-        else if (state === 1) { // STOP
-            state = 2;
-            document.body.classList.remove('running');
-            let finalValue = getMappedValue(totalMeters);
-            prevValue = finalValue;
-            document.getElementById('current-value').innerText = finalValue;
-            document.getElementById('label').innerText = "RISULTATO";
-            speak(finalValue);
-        } 
-        else if (state === 2) { // RESET & RESTART
-            document.getElementById('prev-measure').innerText = "ULTIMA: " + prevValue;
-            state = 0;
-            handleAction(); // Fà ripartire subito la misura
+            document.getElementById('obd-status').innerText = "OBD: CONNESSO";
+            document.getElementById('obd-status').className = "connected";
+            document.getElementById('conn-btn').style.display = "none";
+            document.getElementById('main-val').innerText = "0";
+            document.getElementById('info-label').innerText = "ATTESA TASTO";
+            
+            startDataLoop();
+        } catch (err) {
+            alert("Errore: " + err.message);
         }
     }
 
-    function getMappedValue(realM) {
-        // Cerca nella tabella se c'è una parola o un numero custom
-        let match = mapping.find(m => realM >= m.real - 5 && realM <= m.real + 5);
-        return match ? match.display : Math.round(realM) + " m";
+    // Simulazione o lettura dati reale
+    function startDataLoop() {
+        setInterval(async () => {
+            if (!gattChar || state !== 1) return;
+
+            try {
+                // Invia richiesta velocità (Standard OBD PID 010D)
+                await gattChar.writeValue(new TextEncoder().encode("010D\r"));
+                
+                // Qui calcoliamo il tempo passato
+                let now = Date.now();
+                let dt = (now - lastTimestamp) / 1000; // secondi
+                lastTimestamp = now;
+
+                // Calcolo metri approssimato (Dato che non abbiamo ancora il parsing della velocità)
+                // Inseriremo qui il parsing reale quando vedremo i dati grezzi
+                // totalMeters += (velocità_letta * dt) / 3.6; 
+                
+                updateDisplay();
+            } catch (e) { console.log("Errore loop"); }
+        }, 200);
     }
 
-    function speak(text) {
-        let utterance = new SpeechSynthesisUtterance(text);
-        window.speechSynthesis.speak(utterance);
+    // LOGICA 3 CLICK (Tastino Bluetooth)
+    window.addEventListener('keydown', (e) => {
+        // Molti tastini simulano il tasto "Volume Su" o "Invio" o "Spazio"
+        handleInput();
+    });
+
+    function handleInput() {
+        if (state === 0) { // CLICK 1: START
+            state = 1;
+            totalMeters = 0;
+            lastTimestamp = Date.now();
+            document.body.classList.add('recording');
+            document.getElementById('info-label').innerText = "IN CORSA...";
+        } 
+        else if (state === 1) { // CLICK 2: STOP
+            state = 2;
+            document.body.classList.remove('recording');
+            let result = getMappedValue(totalMeters);
+            lastValue = result;
+            document.getElementById('main-val').innerText = result;
+            document.getElementById('info-label').innerText = "MISURA CONCLUSA";
+            speak(result);
+        } 
+        else if (state === 2) { // CLICK 3: RESET + START
+            document.getElementById('last-val').innerText = "PRECEDENTE: " + lastValue;
+            state = 0;
+            handleInput(); // Ricomincia subito
+        }
+    }
+
+    function getMappedValue(meters) {
+        // Cerca nella tabella se i metri reali superano una soglia
+        let found = mapping.slice().reverse().find(m => meters >= m.threshold);
+        return found ? found.output : Math.round(meters);
+    }
+
+    function updateDisplay() {
+        if (state === 1) {
+            document.getElementById('main-val').innerText = getMappedValue(totalMeters);
+        }
+    }
+
+    function speak(txt) {
+        let msg = new SpeechSynthesisUtterance(txt);
+        msg.lang = 'it-IT';
+        window.speechSynthesis.speak(msg);
     }
 </script>
 </body>
