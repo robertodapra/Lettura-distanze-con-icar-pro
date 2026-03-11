@@ -3,119 +3,132 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>OBD FIX - V-LINK</title>
+    <title>OBD RACING MASTER</title>
     <style>
         :root { --bg: #000; --accent: #d4ff00; }
-        body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; text-align: center; }
+        body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; text-align: center; overflow: hidden; }
+        
+        /* Schermata Connessione */
         #conn-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; }
-        #conn-btn { padding: 25px 50px; font-size: 20px; background: var(--accent); border: none; border-radius: 50px; font-weight: bold; }
+        #conn-btn { padding: 30px 60px; font-size: 24px; font-weight: bold; background: var(--accent); border: none; border-radius: 50px; cursor: pointer; color: black; }
+        
+        /* Display */
         .box { flex: 1; display: flex; flex-direction: column; justify-content: center; border-bottom: 1px solid #222; }
-        #speed-val { font-size: 140px; font-weight: bold; line-height: 1; }
-        #trip-val { font-size: 90px; color: var(--accent); }
+        #speed-val { font-size: 160px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+        #trip-val { font-size: 110px; color: var(--accent); font-weight: bold; }
+        .label { font-size: 18px; color: #555; text-transform: uppercase; letter-spacing: 2px; }
+        
+        /* Stati */
+        .measuring { background: #111; border-left: 15px solid var(--accent); }
     </style>
 </head>
 <body>
 
 <div id="conn-layer">
-    <h2 style="color:var(--accent)">STEP 1: CONNESSIONE</h2>
-    <p>Assicurati che il Bluetooth sia attivo</p>
-    <button id="conn-btn" onclick="startConnection()">TROVA V-LINK</button>
+    <button id="conn-btn" onclick="connect()">COLLEGA OBD</button>
+    <p style="margin-top:20px; color:#666">Tocca per iniziare</p>
 </div>
 
 <div class="box">
+    <div class="label">KM/H</div>
     <div id="speed-val">0</div>
-    <div style="color:#444">KM/H REALI</div>
 </div>
 
 <div id="trip-box" class="box">
     <div id="trip-val">0</div>
-    <div id="status" style="color:#555">ATTESA TASTO</div>
+    <div id="status" class="label">PRONTO</div>
 </div>
 
 <script>
-    let characteristic;
+    let gattChar;
     let state = 0; 
     let totalMeters = 0;
     let currentSpeed = 0;
     let lastTime = 0;
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
 
-    // Lista UUID comuni per V-LINK e cloni ELM327 BLE
-    const targetUUIDs = [
-        '0000fff0-0000-1000-8000-00805f9b34fb', // Quello precedente
-        '0000ffe0-0000-1000-8000-00805f9b34fb', // Comune nei cloni
-        '000018f0-0000-1000-8000-00805f9b34fb', // Standard OBD BLE
-        'ae08' // Proprietario alcuni V-Link
-    ];
-
-    async function startConnection() {
+    async function connect() {
         try {
             const device = await navigator.bluetooth.requestDevice({
                 acceptAllDevices: true,
-                optionalServices: targetUUIDs
+                optionalServices: [
+                    '0000fff0-0000-1000-8000-00805f9b34fb',
+                    '0000ffe0-0000-1000-8000-00805f9b34fb',
+                    '0000ae08-0000-1000-8000-00805f9b34fb'
+                ]
             });
 
             const server = await device.gatt.connect();
             
-            // Cerchiamo quale degli UUID è quello giusto
+            // Prova a connettersi ai servizi comuni
+            const uuids = ['0000fff0-0000-1000-8000-00805f9b34fb', '0000ffe0-0000-1000-8000-00805f9b34fb', '0000ae08-0000-1000-8000-00805f9b34fb'];
             let service;
-            for (let uuid of targetUUIDs) {
-                try {
-                    service = await server.getPrimaryService(uuid);
-                    if (service) break;
-                } catch (e) { continue; }
+            for (const uuid of uuids) {
+                try { service = await server.getPrimaryService(uuid); if (service) break; } catch (e) {}
             }
 
-            if (!service) throw new Error("Servizio non trovato. Prova a riaccendere l'OBD.");
-
             const chars = await service.getCharacteristics();
-            characteristic = chars[0];
+            gattChar = chars[0];
 
-            await characteristic.startNotifications();
+            await gattChar.startNotifications();
+            gattChar.addEventListener('characteristicvaluechanged', handleData);
+            
+            // Inizializzazione rapida OBD
+            await gattChar.writeValue(encoder.encode("ATZ\r")); 
+            setTimeout(() => gattChar.writeValue(encoder.encode("ATH0\r")), 500);
+            
             document.getElementById('conn-layer').style.display = "none";
 
-            characteristic.addEventListener('characteristicvaluechanged', (event) => {
-                let raw = new TextDecoder().decode(event.target.value).replace(/\s+/g, '');
-                if (raw.includes("410D")) {
-                    let index = raw.indexOf("410D");
-                    let hexValue = raw.substr(index + 4, 2); 
-                    currentSpeed = parseInt(hexValue, 16);
-                    document.getElementById('speed-val').innerText = currentSpeed;
-
-                    if (state === 1) {
-                        let now = Date.now();
-                        if (lastTime > 0) {
-                            let dt = (now - lastTime) / 1000;
-                            totalMeters += (currentSpeed / 3.6) * dt;
-                            document.getElementById('trip-val').innerText = Math.round(totalMeters);
-                        }
-                        lastTime = now;
-                    }
-                }
-            });
-
-            // Loop richiesta velocità
+            // Richiesta velocità ad alta frequenza (150ms per ridurre il ritardo)
             setInterval(() => {
-                if(characteristic) characteristic.writeValue(new TextEncoder().encode("010D\r"));
-            }, 250);
+                if (gattChar) gattChar.writeValue(encoder.encode("010D\r"));
+            }, 150);
 
         } catch (e) {
-            alert("Errore: " + e.message + "\n\nSuggerimento: Stacca e riattacca l'OBD dalla macchina.");
+            alert("Errore: " + e.message);
         }
     }
 
-    // Logica Tasto
-    window.onkeydown = () => {
-        if (state === 0) { 
-            state = 1; totalMeters = 0; lastTime = Date.now();
-            document.getElementById('status').innerText = "CALCOLO...";
-            document.getElementById('trip-box').style.background = "#111";
-        } else if (state === 1) {
+    function handleData(event) {
+        let raw = decoder.decode(event.target.value).replace(/\s+/g, '');
+        if (raw.includes("410D")) {
+            let index = raw.indexOf("410D");
+            let hex = raw.substr(index + 4, 2);
+            currentSpeed = parseInt(hex, 16);
+            
+            document.getElementById('speed-val').innerText = currentSpeed;
+
+            if (state === 1) {
+                let now = Date.now();
+                if (lastTime > 0) {
+                    let dt = (now - lastTime) / 1000;
+                    totalMeters += (currentSpeed / 3.6) * dt;
+                    document.getElementById('trip-val').innerText = Math.round(totalMeters);
+                }
+                lastTime = now;
+            }
+        }
+    }
+
+    // LOGICA TASTO (Start -> Stop -> Reset/Restart)
+    window.onkeydown = (e) => {
+        if (state === 0) { // 1. START
+            state = 1;
+            totalMeters = 0;
+            lastTime = Date.now();
+            document.getElementById('status').innerText = "MISURANDO...";
+            document.getElementById('trip-box').classList.add('measuring');
+        } else if (state === 1) { // 2. STOP
             state = 2;
-            document.getElementById('status').innerText = "FINE";
-            document.getElementById('trip-box').style.background = "#000";
-            speechSynthesis.speak(new SpeechSynthesisUtterance(Math.round(totalMeters) + " metri"));
-        } else {
-            state = 0; window.onkeydown();
+            document.getElementById('status').innerText = "FINE (RISULTATO)";
+            document.getElementById('trip-box').classList.remove('measuring');
+            let m = Math.round(totalMeters);
+            document.getElementById('trip-val').innerText = m;
+            speechSynthesis.speak(new SpeechSynthesisUtterance(m + " metri"));
+        } else if (state === 2) { // 3. RESET & RESTART
+            state = 0;
+            window.onkeydown(); // Riesegue subito lo START
         }
     };
 </script>
