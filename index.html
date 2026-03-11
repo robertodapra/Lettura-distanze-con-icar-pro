@@ -3,27 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>LIVE ROAD TEST</title>
+    <title>OBD LIVE TEST</title>
     <style>
         :root { --bg: #000; --accent: #d4ff00; }
         body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; text-align: center; }
-        #speed-val { font-size: 150px; font-weight: bold; margin-top: 20px; line-height: 1; }
-        #trip-val { font-size: 100px; color: var(--accent); margin-bottom: 10px; }
-        #label { font-size: 20px; color: #555; text-transform: uppercase; }
+        
+        #conn-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); display: flex; justify-content: center; align-items: center; z-index: 100; }
+        #conn-btn { padding: 30px 60px; font-size: 24px; font-weight: bold; background: var(--accent); color: black; border: none; border-radius: 50px; cursor: pointer; }
+        
         .box { flex: 1; display: flex; flex-direction: column; justify-content: center; border-bottom: 1px solid #222; }
+        #speed-val { font-size: 150px; font-weight: bold; line-height: 1; }
+        #trip-val { font-size: 100px; color: var(--accent); }
         .active { background: #111; border-left: 10px solid var(--accent); }
+        #status { font-size: 18px; color: #555; }
     </style>
 </head>
 <body>
 
+<div id="conn-layer">
+    <button id="conn-btn" onclick="startConnection()">COLLEGA OBD</button>
+</div>
+
 <div class="box">
-    <div id="label">Velocità Reale</div>
+    <div style="font-size: 18px; color: #555">KM/H</div>
     <div id="speed-val">0</div>
-    <div style="color:#333">KM/H</div>
 </div>
 
 <div id="trip-box" class="box">
-    <div id="label">Metri Rilevati</div>
     <div id="trip-val">0</div>
     <div id="status">ATTESA START</div>
 </div>
@@ -34,53 +40,66 @@
     let totalMeters = 0;
     let currentSpeed = 0;
     let lastTime = 0;
+    const encoder = new TextEncoder();
 
-    async function connect() {
-        const device = await navigator.bluetooth.requestDevice({
-            acceptAllDevices: true,
-            optionalServices: ['0000fff0-0000-1000-8000-00805f9b34fb']
-        });
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService('0000fff0-0000-1000-8000-00805f9b34fb');
-        const chars = await service.getCharacteristics();
-        characteristic = chars[0];
+    async function startConnection() {
+        try {
+            const device = await navigator.bluetooth.requestDevice({
+                acceptAllDevices: true,
+                optionalServices: ['0000fff0-0000-1000-8000-00805f9b34fb']
+            });
 
-        await characteristic.startNotifications();
-        characteristic.addEventListener('characteristicvaluechanged', (event) => {
-            let raw = new TextDecoder().decode(event.target.value).replace(/\s+/g, '');
+            const server = await device.gatt.connect();
+            const service = await server.getPrimaryService('0000fff0-0000-1000-8000-00805f9b34fb');
+            const chars = await service.getCharacteristics();
+            characteristic = chars[0];
+
+            await characteristic.startNotifications();
             
-            // Cerchiamo la risposta alla velocità (010D -> 410D)
-            if (raw.includes("410D")) {
-                let index = raw.indexOf("410D");
-                let hexValue = raw.substr(index + 4, 2); 
-                currentSpeed = parseInt(hexValue, 16);
+            // Inizializzazione OBD
+            await characteristic.writeValue(encoder.encode("ATZ\r")); // Reset
+            setTimeout(async () => {
+                await characteristic.writeValue(encoder.encode("ATL0\r")); // Togli echo
+                await characteristic.writeValue(encoder.encode("ATH0\r")); // Togli headers
+                document.getElementById('conn-layer').style.display = "none";
+            }, 1000);
+
+            characteristic.addEventListener('characteristicvaluechanged', (event) => {
+                let raw = new TextDecoder().decode(event.target.value).replace(/\s+/g, '');
                 
-                document.getElementById('speed-val').innerText = currentSpeed;
+                if (raw.includes("410D")) {
+                    let index = raw.indexOf("410D");
+                    let hexValue = raw.substr(index + 4, 2); 
+                    currentSpeed = parseInt(hexValue, 16);
+                    document.getElementById('speed-val').innerText = currentSpeed;
 
-                if (state === 1) {
-                    let now = Date.now();
-                    if (lastTime > 0) {
-                        let dt = (now - lastTime) / 1000;
-                        totalMeters += (currentSpeed / 3.6) * dt;
-                        document.getElementById('trip-val').innerText = Math.round(totalMeters);
+                    if (state === 1) {
+                        let now = Date.now();
+                        if (lastTime > 0) {
+                            let dt = (now - lastTime) / 1000;
+                            totalMeters += (currentSpeed / 3.6) * dt;
+                            document.getElementById('trip-val').innerText = Math.round(totalMeters);
+                        }
+                        lastTime = now;
                     }
-                    lastTime = now;
                 }
-            }
-        });
+            });
 
-        setInterval(() => {
-            characteristic.writeValue(new TextEncoder().encode("010D\r"));
-        }, 200);
+            // Loop richiesta velocità ogni 250ms
+            setInterval(() => {
+                if(characteristic) characteristic.writeValue(encoder.encode("010D\r"));
+            }, 250);
+
+        } catch (e) {
+            alert("Errore connessione: " + e.message);
+        }
     }
 
-    // Forza la connessione al primo tocco sullo schermo se non l'hai già fatta
-    window.onclick = () => { if(!characteristic) connect(); };
-
+    // Gestione tasto fisico Bluetooth
     window.onkeydown = () => {
         if (state === 0) { 
             state = 1; totalMeters = 0; lastTime = Date.now();
-            document.getElementById('status').innerText = "MISURANDO...";
+            document.getElementById('status').innerText = "IN CORSO...";
             document.getElementById('trip-box').classList.add('active');
         } else if (state === 1) {
             state = 2;
@@ -89,7 +108,8 @@
             let m = Math.round(totalMeters);
             speechSynthesis.speak(new SpeechSynthesisUtterance(m + " metri"));
         } else {
-            state = 0; window.onkeydown(); // Reset e Restart
+            state = 0;
+            window.onkeydown(); 
         }
     };
 </script>
