@@ -2,37 +2,40 @@
 <html lang="it">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>ICAR PRO QUICK CONNECT</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OBD PC MASTER</title>
     <style>
-        :root { --bg: #000; --accent: #d4ff00; }
-        body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; text-align: center; overflow: hidden; }
-        #conn-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; }
-        #conn-btn { padding: 30px 60px; font-size: 24px; background: var(--accent); border: none; border-radius: 50px; cursor: pointer; color: black; font-weight: bold; }
-        .box { flex: 1; display: flex; flex-direction: column; justify-content: center; border-bottom: 2px solid #111; }
-        #speed-val { font-size: 160px; font-weight: 900; line-height: 1; }
-        #trip-val { font-size: 110px; color: var(--accent); font-weight: bold; }
-        #debug { font-size: 12px; color: #444; height: 50px; padding: 10px; font-family: monospace; }
+        :root { --bg: #0b0b0b; --accent: #d4ff00; }
+        body { background: var(--bg); color: white; font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; text-align: center; }
+        #conn-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; }
+        #conn-btn { padding: 25px 50px; font-size: 22px; background: var(--accent); border: none; border-radius: 8px; cursor: pointer; color: black; font-weight: bold; text-transform: uppercase; }
+        .box { flex: 1; display: flex; flex-direction: column; justify-content: center; border-bottom: 1px solid #222; }
+        #speed-val { font-size: 140px; font-weight: 800; line-height: 1; margin: 0; }
+        #trip-val { font-size: 90px; color: var(--accent); font-weight: bold; margin: 0; }
+        .label { font-size: 14px; color: #555; letter-spacing: 2px; margin-bottom: 5px; }
+        #debug-log { background: #000; color: #00ff00; font-family: monospace; font-size: 11px; height: 100px; overflow-y: auto; text-align: left; padding: 10px; border-top: 2px solid #333; }
     </style>
 </head>
 <body>
 
 <div id="conn-layer">
-    <button id="conn-btn" id="main-btn">CONNETTI OBD</button>
-    <p id="status-msg" style="color:#666; margin-top:20px;">Clicca per aprire la tendina Bluetooth</p>
+    <button id="conn-btn" onclick="connectPC()">CONNETTI OBD (CHROME PC)</button>
+    <p style="color: #666; margin-top: 15px;">Assicurati che il Bluetooth del PC sia acceso</p>
 </div>
 
 <div class="box">
-    <div style="font-size:18px; color:#555">VELOCITÀ KM/H</div>
-    <div id="speed-val">0</div>
+    <div class="label">VELOCITÀ ATTUALE</div>
+    <p id="speed-val">0</p>
+    <div style="color: #333">KM/H</div>
 </div>
 
 <div id="trip-box" class="box">
-    <div id="trip-val">0</div>
-    <div id="trip-status" style="font-size:18px; color:#555">PRONTO</div>
+    <div class="label">METRI RILEVATI</div>
+    <p id="trip-val">0</p>
+    <div id="trip-status" style="color: #555">SISTEMA PRONTO</div>
 </div>
 
-<div id="debug">Log: In attesa...</div>
+<div id="debug-log">In attesa di comando...</div>
 
 <script>
     let gattChar;
@@ -40,28 +43,27 @@
     let totalMeters = 0;
     let currentSpeed = 0;
     let lastTime = 0;
+    const enc = new TextEncoder();
+    const dec = new TextDecoder();
 
-    // Funzione di log rapida
-    function updateLog(text) {
-        document.getElementById('debug').innerText = text;
+    function log(msg) {
+        const d = document.getElementById('debug-log');
+        d.innerHTML = "> " + msg + "<br>" + d.innerHTML;
     }
 
-    // IL TASTO DEVE ATTIVARE QUESTO
-    document.getElementById('conn-btn').addEventListener('click', async () => {
-        updateLog("Apertura tendina...");
+    async function connectPC() {
         try {
+            log("Richiesta dispositivo Bluetooth...");
+            // Chrome PC richiede i servizi esatti o 'acceptAllDevices'
             const device = await navigator.bluetooth.requestDevice({
                 acceptAllDevices: true,
-                optionalServices: [
-                    '000018f0-0000-1000-8000-00805f9b34fb',
-                    '0000fff0-0000-1000-8000-00805f9b34fb'
-                ]
+                optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', '0000fff0-0000-1000-8000-00805f9b34fb']
             });
 
-            updateLog("Connessione a " + device.name + "...");
+            log("Connessione a: " + device.name);
             const server = await device.gatt.connect();
             
-            updateLog("Ricerca canali...");
+            log("Scansione servizi OBD...");
             const services = await server.getPrimaryServices();
             
             for (const s of services) {
@@ -75,12 +77,12 @@
                 if (gattChar) break;
             }
 
-            if (!gattChar) throw new Error("Canale non trovato");
+            if (!gattChar) throw new Error("Nessun canale di scrittura trovato!");
 
+            log("Canale trovato. Avvio notifiche...");
             await gattChar.startNotifications();
             gattChar.addEventListener('characteristicvaluechanged', (e) => {
-                let raw = new TextDecoder().decode(e.target.value).replace(/\s+/g, '');
-                updateLog("Dati: " + raw);
+                let raw = dec.decode(e.target.value).replace(/\s+/g, '');
                 if (raw.includes("410D")) {
                     let hex = raw.substr(raw.indexOf("410D") + 4, 2);
                     currentSpeed = parseInt(hex, 16);
@@ -94,36 +96,45 @@
                 }
             });
 
-            // Inizializzazione
-            const cmds = ["ATZ\r", "ATSP0\r", "010D\r"];
-            for (let cmd of cmds) {
-                await gattChar.writeValue(new TextEncoder().encode(cmd));
-                await new Promise(r => setTimeout(r, 400));
+            // Sequenza di sblocco per iCar Pro su PC
+            const initSteps = ["ATZ\r", "ATE0\r", "ATSP0\r", "010D\r"];
+            for (let cmd of initSteps) {
+                log("Invio comando: " + cmd.trim());
+                await gattChar.writeValue(enc.encode(cmd));
+                await new Promise(r => setTimeout(r, 800)); // Delay maggiore per PC
             }
 
             document.getElementById('conn-layer').style.display = "none";
-            
+            log("SISTEMA OPERATIVO");
+
             setInterval(() => {
-                if (gattChar) gattChar.writeValue(new TextEncoder().encode("010D\r")).catch(()=>{});
-            }, 200);
+                if (gattChar) gattChar.writeValue(enc.encode("010D\r")).catch(()=>{});
+            }, 250);
 
         } catch (err) {
-            updateLog("ERRORE: " + err.message);
-            alert("Errore Bluetooth: " + err.message);
+            log("ERRORE: " + err.message);
+            console.error(err);
         }
-    });
+    }
 
-    // Gestione tasto esterno (tastiera/pulsante BT)
-    window.onkeydown = () => {
+    // Tasto per gestire la misurazione (puoi usare la BARRA SPAZIATRICE sul PC)
+    window.onkeydown = (e) => {
         if (state === 0) {
             state = 1; totalMeters = 0; lastTime = Date.now();
-            document.getElementById('trip-status').innerText = "MISURANDO...";
+            document.getElementById('trip-status').innerText = "MISURAZIONE ATTIVA";
+            document.getElementById('trip-box').style.background = "#111";
         } else if (state === 1) {
             state = 2;
-            document.getElementById('trip-status').innerText = "STOP";
-            speechSynthesis.speak(new SpeechSynthesisUtterance(Math.round(totalMeters) + " metri"));
+            document.getElementById('trip-status').innerText = "MISURAZIONE FERMA";
+            document.getElementById('trip-box').style.background = "#000";
+            let res = Math.round(totalMeters);
+            // Sintesi vocale del PC
+            let msg = new SpeechSynthesisUtterance(res + " metri");
+            msg.lang = 'it-IT';
+            window.speechSynthesis.speak(msg);
         } else {
-            state = 0; window.onkeydown();
+            state = 0;
+            window.onkeydown();
         }
     };
 </script>
