@@ -6,40 +6,26 @@
     <title>OBD MASTER PRO</title>
     <style>
         :root { --bg: #050505; --accent: #d4ff00; --red: #ff3e3e; }
-        body { background: var(--bg); color: white; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        
-        /* Header Stato */
-        #status-bar { display: flex; justify-content: space-between; padding: 15px; font-size: 12px; border-bottom: 1px solid #222; letter-spacing: 1px; }
+        body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        #status-bar { display: flex; justify-content: space-between; padding: 15px; font-size: 12px; border-bottom: 1px solid #222; }
         .connected { color: var(--accent); }
         .disconnected { color: var(--red); }
-
-        /* Display Centrale */
         #display { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-        #last-val { font-size: 18px; color: #666; margin-bottom: 10px; height: 20px; }
-        #main-val { font-size: 100px; font-weight: 900; color: var(--accent); text-align: center; transition: all 0.2s; }
-        #info-label { font-size: 20px; color: #444; margin-top: 20px; text-transform: uppercase; }
-
-        /* Bottoni */
+        #main-val { font-size: 80px; font-weight: 900; color: var(--accent); text-align: center; }
+        #info-label { font-size: 18px; color: #666; margin-top: 10px; }
         #ui-layer { padding: 30px; }
-        button { width: 100%; padding: 20px; background: transparent; border: 2px solid var(--accent); color: var(--accent); border-radius: 12px; font-size: 18px; font-weight: bold; cursor: pointer; }
-        button:active { background: var(--accent); color: black; }
-
-        /* Animazione Registrazione */
-        .recording #main-val { animation: glow 1.5s infinite; }
-        @keyframes glow { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+        button { width: 100%; padding: 20px; background: transparent; border: 2px solid var(--accent); color: var(--accent); border-radius: 12px; font-size: 18px; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div id="status-bar">
     <div id="obd-status" class="disconnected">OBD: DISCONNESSO</div>
-    <div id="speedo">0 KM/H</div>
 </div>
 
 <div id="display">
-    <div id="last-val"></div>
-    <div id="main-val">PRONTO</div>
-    <div id="info-label">CONNETTI DISPOSITIVO</div>
+    <div id="main-val">READY</div>
+    <div id="info-label">CLICCA SOTTO PER CONNETTERE</div>
 </div>
 
 <div id="ui-layer">
@@ -48,35 +34,24 @@
 
 <script>
     let gattChar;
-    let state = 0; // 0: Idle, 1: Running, 2: Stop
+    let state = 0; 
     let totalMeters = 0;
-    let lastTimestamp = 0;
     let lastValue = "";
-
-    // --- TABELLA DI MAPPING PERSONALIZZATA ---
-    const mapping = [
-        { threshold: 10, output: "START" },
-        { threshold: 20, output: "40" },
-        { threshold: 30, output: "ZONA TEST" },
-        { threshold: 50, output: "TRAGUARDO" }
-    ];
 
     async function initOBD() {
         try {
-            // Scansione universale
             const device = await navigator.bluetooth.requestDevice({
                 acceptAllDevices: true,
                 optionalServices: [
                     '0000fff0-0000-1000-8000-00805f9b34fb',
                     '000018f0-0000-1000-8000-00805f9b34fb',
-                    'ae08'
+                    '0000ae08-0000-1000-8000-00805f9b34fb'
                 ]
             });
 
             const server = await device.gatt.connect();
             const services = await server.getPrimaryServices();
             
-            // Trova la prima caratteristica disponibile per scrivere/leggere
             for (let service of services) {
                 const chars = await service.getCharacteristics();
                 if (chars.length > 0) {
@@ -89,83 +64,35 @@
             document.getElementById('obd-status').className = "connected";
             document.getElementById('conn-btn').style.display = "none";
             document.getElementById('main-val').innerText = "0";
-            document.getElementById('info-label').innerText = "ATTESA TASTO";
+            document.getElementById('info-label').innerText = "USA IL TASTO FISICO";
             
-            startDataLoop();
         } catch (err) {
-            alert("Errore: " + err.message);
+            alert("Errore Bluetooth: " + err.message);
         }
     }
 
-    // Simulazione o lettura dati reale
-    function startDataLoop() {
-        setInterval(async () => {
-            if (!gattChar || state !== 1) return;
-
-            try {
-                // Invia richiesta velocità (Standard OBD PID 010D)
-                await gattChar.writeValue(new TextEncoder().encode("010D\r"));
-                
-                // Qui calcoliamo il tempo passato
-                let now = Date.now();
-                let dt = (now - lastTimestamp) / 1000; // secondi
-                lastTimestamp = now;
-
-                // Calcolo metri approssimato (Dato che non abbiamo ancora il parsing della velocità)
-                // Inseriremo qui il parsing reale quando vedremo i dati grezzi
-                // totalMeters += (velocità_letta * dt) / 3.6; 
-                
-                updateDisplay();
-            } catch (e) { console.log("Errore loop"); }
-        }, 200);
-    }
-
-    // LOGICA 3 CLICK (Tastino Bluetooth)
+    // Ascolta il tastino Bluetooth (simula la tastiera)
     window.addEventListener('keydown', (e) => {
-        // Molti tastini simulano il tasto "Volume Su" o "Invio" o "Spazio"
         handleInput();
     });
 
     function handleInput() {
-        if (state === 0) { // CLICK 1: START
+        if (state === 0) { // START
             state = 1;
             totalMeters = 0;
-            lastTimestamp = Date.now();
-            document.body.classList.add('recording');
-            document.getElementById('info-label').innerText = "IN CORSA...";
+            document.getElementById('main-val').innerText = "VAI!";
         } 
-        else if (state === 1) { // CLICK 2: STOP
+        else if (state === 1) { // STOP
             state = 2;
-            document.body.classList.remove('recording');
-            let result = getMappedValue(totalMeters);
-            lastValue = result;
+            let result = "40 m"; // Esempio fisso per ora
             document.getElementById('main-val').innerText = result;
-            document.getElementById('info-label').innerText = "MISURA CONCLUSA";
-            speak(result);
+            let msg = new SpeechSynthesisUtterance(result);
+            window.speechSynthesis.speak(msg);
         } 
-        else if (state === 2) { // CLICK 3: RESET + START
-            document.getElementById('last-val').innerText = "PRECEDENTE: " + lastValue;
+        else if (state === 2) { // RESET
             state = 0;
-            handleInput(); // Ricomincia subito
+            document.getElementById('main-val').innerText = "0";
         }
-    }
-
-    function getMappedValue(meters) {
-        // Cerca nella tabella se i metri reali superano una soglia
-        let found = mapping.slice().reverse().find(m => meters >= m.threshold);
-        return found ? found.output : Math.round(meters);
-    }
-
-    function updateDisplay() {
-        if (state === 1) {
-            document.getElementById('main-val').innerText = getMappedValue(totalMeters);
-        }
-    }
-
-    function speak(txt) {
-        let msg = new SpeechSynthesisUtterance(txt);
-        msg.lang = 'it-IT';
-        window.speechSynthesis.speak(msg);
     }
 </script>
 </body>
