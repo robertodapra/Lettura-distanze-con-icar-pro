@@ -3,144 +3,95 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>RACING TRIPMASTER</title>
+    <title>LIVE ROAD TEST</title>
     <style>
-        :root { --bg: #000; --accent: #d4ff00; --red: #ff3e3e; }
-        body { background: var(--bg); color: white; font-family: 'Impact', sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        
-        #header { padding: 15px; border-bottom: 1px solid #222; display: flex; justify-content: space-between; font-family: sans-serif; font-size: 14px; }
-        .connected { color: var(--accent); }
-
-        #speed-container { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; border-bottom: 1px solid #222; }
-        #live-speed { font-size: 120px; line-height: 1; color: #fff; }
-        .unit { font-size: 30px; color: #444; }
-
-        #trip-container { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center; background: #0a0a0a; }
-        #trip-val { font-size: 100px; color: var(--accent); }
-        #status-label { font-family: sans-serif; font-size: 18px; color: #666; text-transform: uppercase; letter-spacing: 2px; }
-
-        #ui { padding: 20px; }
-        button { width: 100%; padding: 20px; background: transparent; border: 2px solid var(--accent); color: var(--accent); border-radius: 15px; font-size: 20px; cursor: pointer; }
-        
-        .measuring { background: #111; border-left: 10px solid var(--accent); }
-        .measuring #trip-val { animation: pulse 1s infinite; }
-        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
+        :root { --bg: #000; --accent: #d4ff00; }
+        body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; text-align: center; }
+        #speed-val { font-size: 150px; font-weight: bold; margin-top: 20px; line-height: 1; }
+        #trip-val { font-size: 100px; color: var(--accent); margin-bottom: 10px; }
+        #label { font-size: 20px; color: #555; text-transform: uppercase; }
+        .box { flex: 1; display: flex; flex-direction: column; justify-content: center; border-bottom: 1px solid #222; }
+        .active { background: #111; border-left: 10px solid var(--accent); }
     </style>
 </head>
 <body>
 
-<div id="header">
-    <div id="obd-status">OBD: DISCONNESSO</div>
-    <div id="battery">-- %</div>
+<div class="box">
+    <div id="label">Velocità Reale</div>
+    <div id="speed-val">0</div>
+    <div style="color:#333">KM/H</div>
 </div>
 
-<div id="speed-container">
-    <div id="live-speed">0</div>
-    <div class="unit">KM/H</div>
-</div>
-
-<div id="trip-container">
+<div id="trip-box" class="box">
+    <div id="label">Metri Rilevati</div>
     <div id="trip-val">0</div>
-    <div id="status-label">PRONTO</div>
-</div>
-
-<div id="ui">
-    <button id="conn-btn" onclick="initOBD()">CONNETTI OBD</button>
+    <div id="status">ATTESA START</div>
 </div>
 
 <script>
-    let gattChar;
-    let state = 0; // 0: Idle, 1: Misura, 2: Stop
+    let characteristic;
+    let state = 0; 
     let totalMeters = 0;
     let currentSpeed = 0;
-    let lastUpdate = 0;
+    let lastTime = 0;
 
-    // --- CONNESSIONE ---
-    async function initOBD() {
-        try {
-            const device = await navigator.bluetooth.requestDevice({
-                acceptAllDevices: true,
-                optionalServices: ['0000fff0-0000-1000-8000-00805f9b34fb', '000018f0-0000-1000-8000-00805f9b34fb']
-            });
-            const server = await device.gatt.connect();
-            const services = await server.getPrimaryServices();
-            for (let s of services) {
-                let chars = await s.getCharacteristics();
-                if (chars.length > 0) { gattChar = chars[0]; break; }
-            }
-            document.getElementById('obd-status').innerText = "OBD: OK";
-            document.getElementById('obd-status').className = "connected";
-            document.getElementById('conn-btn').style.display = "none";
+    async function connect() {
+        const device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: ['0000fff0-0000-1000-8000-00805f9b34fb']
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService('0000fff0-0000-1000-8000-00805f9b34fb');
+        const chars = await service.getCharacteristics();
+        characteristic = chars[0];
+
+        await characteristic.startNotifications();
+        characteristic.addEventListener('characteristicvaluechanged', (event) => {
+            let raw = new TextDecoder().decode(event.target.value).replace(/\s+/g, '');
             
-            loopRequest(); 
-        } catch (e) { alert("Errore: " + e.message); }
-    }
-
-    // --- LOOP LETTURA VELOCITÀ ---
-    async function loopRequest() {
-        setInterval(async () => {
-            if (!gattChar) return;
-            try {
-                // Richiesta velocità (PID 0D)
-                await gattChar.writeValue(new TextEncoder().encode("010D\r"));
+            // Cerchiamo la risposta alla velocità (010D -> 410D)
+            if (raw.includes("410D")) {
+                let index = raw.indexOf("410D");
+                let hexValue = raw.substr(index + 4, 2); 
+                currentSpeed = parseInt(hexValue, 16);
                 
-                // NOTA: Qui simuliamo l'incremento metri basato sulla velocità
-                // In un test reale, aggiungeremo il parsing della risposta esadecimale
+                document.getElementById('speed-val').innerText = currentSpeed;
+
                 if (state === 1) {
-                    let ora = Date.now();
-                    let dt = (ora - lastUpdate) / 1000; 
-                    lastUpdate = ora;
-                    totalMeters += (currentSpeed / 3.6) * dt;
-                    document.getElementById('trip-val').innerText = Math.round(totalMeters);
+                    let now = Date.now();
+                    if (lastTime > 0) {
+                        let dt = (now - lastTime) / 1000;
+                        totalMeters += (currentSpeed / 3.6) * dt;
+                        document.getElementById('trip-val').innerText = Math.round(totalMeters);
+                    }
+                    lastTime = now;
                 }
-            } catch (err) {}
+            }
+        });
+
+        setInterval(() => {
+            characteristic.writeValue(new TextEncoder().encode("010D\r"));
         }, 200);
     }
 
-    // --- LOGICA 3 CLICK ---
-    window.addEventListener('keydown', (e) => {
-        // Gestisce l'input del tastino Bluetooth (qualsiasi tasto prema)
-        gestisciInput();
-    });
+    // Forza la connessione al primo tocco sullo schermo se non l'hai già fatta
+    window.onclick = () => { if(!characteristic) connect(); };
 
-    function gestisciInput() {
+    window.onkeydown = () => {
         if (state === 0) { 
-            // 1° CLICK: START
-            state = 1;
-            totalMeters = 0;
-            lastUpdate = Date.now();
-            document.getElementById('status-label').innerText = "MISURANDO...";
-            document.getElementById('trip-container').classList.add('measuring');
-        } 
-        else if (state === 1) { 
-            // 2° CLICK: STOP
+            state = 1; totalMeters = 0; lastTime = Date.now();
+            document.getElementById('status').innerText = "MISURANDO...";
+            document.getElementById('trip-box').classList.add('active');
+        } else if (state === 1) {
             state = 2;
-            document.getElementById('status-label').innerText = "FERMO (RISULTATO)";
-            document.getElementById('trip-container').classList.remove('measuring');
-            let finale = Math.round(totalMeters) + " metri";
-            document.getElementById('trip-val').innerText = Math.round(totalMeters);
-            pronuncia(finale);
-        } 
-        else if (state === 2) { 
-            // 3° CLICK: RESET & RESTART IMMEDIATO
-            state = 0;
-            gestisciInput(); // Riparte subito
+            document.getElementById('status').innerText = "RISULTATO";
+            document.getElementById('trip-box').classList.remove('active');
+            let m = Math.round(totalMeters);
+            speechSynthesis.speak(new SpeechSynthesisUtterance(m + " metri"));
+        } else {
+            state = 0; window.onkeydown(); // Reset e Restart
         }
-    }
-
-    function pronuncia(testo) {
-        let ogg = new SpeechSynthesisUtterance(testo);
-        ogg.lang = 'it-IT';
-        ogg.rate = 1.1;
-        window.speechSynthesis.speak(ogg);
-    }
-
-    // Simulatore velocità per test statico (togli questo quando sei in auto)
-    window.addEventListener('mousemove', (e) => {
-        currentSpeed = Math.floor((e.clientX / window.innerWidth) * 150);
-        document.getElementById('live-speed').innerText = currentSpeed;
-    });
+    };
 </script>
-
 </body>
 </html>
