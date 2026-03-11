@@ -3,22 +3,16 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>OBD RACING MASTER</title>
+    <title>OBD MASTER PRO</title>
     <style>
         :root { --bg: #000; --accent: #d4ff00; }
         body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; text-align: center; overflow: hidden; }
-        
-        /* Schermata Connessione */
         #conn-layer { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #000; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 100; }
         #conn-btn { padding: 30px 60px; font-size: 24px; font-weight: bold; background: var(--accent); border: none; border-radius: 50px; cursor: pointer; color: black; }
-        
-        /* Display */
         .box { flex: 1; display: flex; flex-direction: column; justify-content: center; border-bottom: 1px solid #222; }
-        #speed-val { font-size: 160px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+        #speed-val { font-size: 160px; font-weight: 900; line-height: 1; }
         #trip-val { font-size: 110px; color: var(--accent); font-weight: bold; }
-        .label { font-size: 18px; color: #555; text-transform: uppercase; letter-spacing: 2px; }
-        
-        /* Stati */
+        .label { font-size: 18px; color: #555; text-transform: uppercase; }
         .measuring { background: #111; border-left: 15px solid var(--accent); }
     </style>
 </head>
@@ -26,7 +20,7 @@
 
 <div id="conn-layer">
     <button id="conn-btn" onclick="connect()">COLLEGA OBD</button>
-    <p style="margin-top:20px; color:#666">Tocca per iniziare</p>
+    <p id="debug-info" style="margin-top:20px; color:#666; font-size:12px;">Pronto alla scansione</p>
 </div>
 
 <div class="box">
@@ -45,58 +39,66 @@
     let totalMeters = 0;
     let currentSpeed = 0;
     let lastTime = 0;
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
 
     async function connect() {
+        const debug = document.getElementById('debug-info');
         try {
+            debug.innerText = "Cerca dispositivo...";
             const device = await navigator.bluetooth.requestDevice({
                 acceptAllDevices: true,
                 optionalServices: [
                     '0000fff0-0000-1000-8000-00805f9b34fb',
                     '0000ffe0-0000-1000-8000-00805f9b34fb',
+                    '000018f0-0000-1000-8000-00805f9b34fb',
                     '0000ae08-0000-1000-8000-00805f9b34fb'
                 ]
             });
 
+            debug.innerText = "Connessione GATT...";
             const server = await device.gatt.connect();
             
-            // Prova a connettersi ai servizi comuni
-            const uuids = ['0000fff0-0000-1000-8000-00805f9b34fb', '0000ffe0-0000-1000-8000-00805f9b34fb', '0000ae08-0000-1000-8000-00805f9b34fb'];
-            let service;
-            for (const uuid of uuids) {
-                try { service = await server.getPrimaryService(uuid); if (service) break; } catch (e) {}
+            debug.innerText = "Ricerca Servizi...";
+            const services = await server.getPrimaryServices();
+            
+            // Scansione automatica di tutti i servizi per trovare quello giusto
+            for (const service of services) {
+                const chars = await service.getCharacteristics();
+                for (const char of chars) {
+                    if (char.properties.write || char.properties.writeWithoutResponse) {
+                        gattChar = char;
+                        break;
+                    }
+                }
+                if (gattChar) break;
             }
 
-            const chars = await service.getCharacteristics();
-            gattChar = chars[0];
+            if (!gattChar) throw new Error("Nessun canale di scrittura trovato.");
 
-            await gattChar.startNotifications();
+            await gattChar.startNotifications().catch(() => {});
             gattChar.addEventListener('characteristicvaluechanged', handleData);
             
-            // Inizializzazione rapida OBD
-            await gattChar.writeValue(encoder.encode("ATZ\r")); 
-            setTimeout(() => gattChar.writeValue(encoder.encode("ATH0\r")), 500);
+            // Inizializzazione OBD
+            await gattChar.writeValue(new TextEncoder().encode("ATZ\r")).catch(() => {});
             
             document.getElementById('conn-layer').style.display = "none";
 
-            // Richiesta velocità ad alta frequenza (150ms per ridurre il ritardo)
+            // Loop velocità rapido
             setInterval(() => {
-                if (gattChar) gattChar.writeValue(encoder.encode("010D\r"));
+                if (gattChar) gattChar.writeValue(new TextEncoder().encode("010D\r")).catch(() => {});
             }, 150);
 
         } catch (e) {
+            debug.innerText = "ERRORE: " + e.message;
             alert("Errore: " + e.message);
         }
     }
 
     function handleData(event) {
-        let raw = decoder.decode(event.target.value).replace(/\s+/g, '');
+        let raw = new TextDecoder().decode(event.target.value).replace(/\s+/g, '');
         if (raw.includes("410D")) {
             let index = raw.indexOf("410D");
             let hex = raw.substr(index + 4, 2);
             currentSpeed = parseInt(hex, 16);
-            
             document.getElementById('speed-val').innerText = currentSpeed;
 
             if (state === 1) {
@@ -111,24 +113,20 @@
         }
     }
 
-    // LOGICA TASTO (Start -> Stop -> Reset/Restart)
-    window.onkeydown = (e) => {
-        if (state === 0) { // 1. START
-            state = 1;
-            totalMeters = 0;
-            lastTime = Date.now();
+    // Tasto fisico (Volume, Invio, ecc.)
+    window.onkeydown = () => {
+        if (state === 0) { 
+            state = 1; totalMeters = 0; lastTime = Date.now();
             document.getElementById('status').innerText = "MISURANDO...";
             document.getElementById('trip-box').classList.add('measuring');
-        } else if (state === 1) { // 2. STOP
+        } else if (state === 1) { 
             state = 2;
-            document.getElementById('status').innerText = "FINE (RISULTATO)";
+            document.getElementById('status').innerText = "RISULTATO";
             document.getElementById('trip-box').classList.remove('measuring');
             let m = Math.round(totalMeters);
-            document.getElementById('trip-val').innerText = m;
             speechSynthesis.speak(new SpeechSynthesisUtterance(m + " metri"));
-        } else if (state === 2) { // 3. RESET & RESTART
-            state = 0;
-            window.onkeydown(); // Riesegue subito lo START
+        } else {
+            state = 0; window.onkeydown();
         }
     };
 </script>
